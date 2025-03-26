@@ -54,6 +54,15 @@ load_env() {
 install_dependencies() {
     echo -e "${BLUE}正在安装必要组件...${NC}"
     
+    # 安装 expect
+    if ! command -v expect &> /dev/null; then
+        echo -e "${GREEN}安装 expect...${NC}"
+        sudo apt-get update && sudo apt-get install expect -y || {
+            echo -e "${RED}expect 安装失败${NC}"
+            return 1
+        }
+    fi
+    
     # 检查并安装 Rust
     if ! command -v cargo &> /dev/null; then
         echo -e "${GREEN}安装 Rust...${NC}"
@@ -118,22 +127,72 @@ install_dependencies() {
 
 # 检查必要的命令是否安装
 check_requirements() {
+    local need_install=false
+    
+    # 检查 expect
+    if ! command -v expect &> /dev/null; then
+        need_install=true
+    fi
+    
+    # 检查 cargo
+    if ! command -v cargo &> /dev/null; then
+        need_install=true
+    fi
+    
+    # 检查 soundness-cli
     if ! command -v soundness-cli &> /dev/null; then
-        echo -e "${BLUE}检测到未安装必要组件，开始安装...${NC}"
+        need_install=true
+    fi
+    
+    # 检查 soundnessup
+    if ! command -v soundnessup &> /dev/null; then
+        need_install=true
+    fi
+    
+    # 如果需要安装任何组件
+    if [ "$need_install" = true ]; then
+        echo -e "${BLUE}检测到未安装的必要组件，开始安装...${NC}"
         install_dependencies
         
         # 验证安装结果
-        if ! command -v soundness-cli &> /dev/null; then
-            echo -e "${RED}安装失败，请尝试手动安装：${NC}"
-            echo "1. curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-            echo "2. source \$HOME/.cargo/env"
-            echo "3. curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
-            echo "4. source ~/.bashrc"
-            echo "5. soundnessup install"
-            echo "6. soundnessup update"
-            exit 1
+        local failed=false
+        
+        if ! command -v expect &> /dev/null; then
+            echo -e "${RED}expect 安装失败${NC}"
+            failed=true
         fi
+        
+        if ! command -v cargo &> /dev/null; then
+            echo -e "${RED}Rust/Cargo 安装失败${NC}"
+            failed=true
+        fi
+        
+        if ! command -v soundness-cli &> /dev/null; then
+            echo -e "${RED}soundness-cli 安装失败${NC}"
+            failed=true
+        fi
+        
+        if ! command -v soundnessup &> /dev/null; then
+            echo -e "${RED}soundnessup 安装失败${NC}"
+            failed=true
+        fi
+        
+        if [ "$failed" = true ]; then
+            echo -e "${RED}部分组件安装失败，请尝试手动安装：${NC}"
+            echo "1. sudo apt-get update && sudo apt-get install expect"
+            echo "2. curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            echo "3. source \$HOME/.cargo/env"
+            echo "4. curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
+            echo "5. source ~/.bashrc"
+            echo "6. soundnessup install"
+            echo "7. soundnessup update"
+            return 1
+        fi
+    else
+        echo -e "${GREEN}所有依赖已安装${NC}"
     fi
+    
+    return 0
 }
 
 # 生成并保存密钥
@@ -163,7 +222,15 @@ generate_keys() {
         local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
         
         # 生成密钥并捕获输出
-        output=$(echo "$password" | soundness-cli generate-key --name "$key_name" 2>&1)
+        # 使用 expect 模式来自动处理密码输入
+        output=$(expect -c "
+            spawn soundness-cli generate-key --name \"$key_name\"
+            expect \"Enter password for secret key: \"
+            send \"$password\r\"
+            expect \"Confirm password: \"
+            send \"$password\r\"
+            expect eof
+            " 2>&1)
         
         if [ $? -ne 0 ]; then
             echo -e "${RED}生成密钥失败，请确保 soundness-cli 已正确安装${NC}"
@@ -229,8 +296,11 @@ show_menu() {
         read choice
         case $choice in
             1)
-                check_requirements
-                echo -e "${GREEN}依赖安装完成！${NC}"
+                if check_requirements; then
+                    echo -e "${GREEN}依赖安装完成！${NC}"
+                else
+                    echo -e "${RED}依赖安装失败，请查看上述错误信息${NC}"
+                fi
                 ;;
             2)
                 if ! command -v soundness-cli &> /dev/null; then
