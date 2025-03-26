@@ -54,6 +54,14 @@ generate_random_name() {
     echo "${adj}_${noun}_${num}"
 }
 
+# 生成单个密钥
+generate_key() {
+    local key_name=$(generate_random_name)
+    echo "正在生成密钥 ${key_name}..."
+    echo "${RED}注意：请务必保存生成的24个助记词！${NC}"
+    soundness-cli generate-key --name "$key_name"
+}
+
 # 批量生成密钥
 generate_multiple_keys() {
     local count=$1
@@ -89,7 +97,7 @@ query_keys() {
     if [ ! -d "$keys_dir" ]; then
         echo "${RED}未找到密钥目录！${NC}"
         return 1
-    }
+    fi
     
     echo "${GREEN}=== 密钥文件列表 ===${NC}"
     local files=($(ls -t $keys_dir))
@@ -97,7 +105,7 @@ query_keys() {
     if [ ${#files[@]} -eq 0 ]; then
         echo "${RED}未找到任何密钥文件${NC}"
         return 1
-    }
+    fi
     
     for ((i=0; i<${#files[@]}; i++)); do
         echo "[$((i+1))] ${files[$i]}"
@@ -115,7 +123,7 @@ query_keys() {
     fi
 }
 
-# 修改主流程，添加参数支持
+# 主流程
 main() {
     if [ "$1" = "query" ]; then
         query_keys
