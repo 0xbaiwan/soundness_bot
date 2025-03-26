@@ -139,8 +139,8 @@ check_requirements() {
 # 生成并保存密钥
 generate_keys() {
     local count=$1
-    local password=$2
     local words=("apple" "banana" "cherry" "dragon" "eagle" "falcon" "grape" "horse" "island" "jaguar" "koala" "lemon" "mango" "ninja" "orange" "panda" "queen" "rabbit" "snake" "tiger" "umbrella" "violet" "whale" "xenon" "yellow" "zebra")
+    local password
     
     # 检查磁盘空间
     if [ "$(df -P "$HOME" | awk 'NR==2 {print $4}')" -lt 1048576 ]; then
@@ -148,13 +148,11 @@ generate_keys() {
         return 1
     fi
 
-    # 询问密码（如果未提供）
-    if [ -z "$password" ]; then
-        echo -n "请输入密码（所有白名单将共用此密码）: "
-        read -s password
-        echo
-    fi
-    
+    # 获取密码
+    echo -n "请输入密码: "
+    read -s password
+    echo
+
     for ((i=1; i<=count; i++)); do
         echo -e "${GREEN}正在生成第 $i 个密钥...${NC}"
         
