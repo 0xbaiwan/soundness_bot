@@ -80,14 +80,31 @@ generate_multiple_keys() {
         local key_name=$(generate_random_name)
         echo "${GREEN}正在生成密钥 $key_name...${NC}"
         echo "=== Key $i: $key_name ===" >> "$log_file"
-        soundness-cli generate-key --name "$key_name" | tee -a "$log_file"
         echo "----------------------------------------" >> "$log_file"
+        
+        # 运行命令并捕获完整输出
+        local output
+        output=$(soundness-cli generate-key --name "$key_name" 2>&1)
+        
+        # 检查命令是否成功
+        if [ $? -eq 0 ]; then
+            echo "$output" >> "$log_file"
+            echo "${GREEN}✓ 密钥 $key_name 生成成功${NC}"
+        else
+            echo "${RED}✗ 密钥 $key_name 生成失败${NC}"
+            echo "Error: $output" >> "$log_file"
+        fi
+        
+        echo "----------------------------------------" >> "$log_file"
+        echo "" >> "$log_file"
+        
         # 随机延迟2-5秒
         sleep $((RANDOM % 4 + 2))
     done
     
     echo "${GREEN}所有密钥已生成完成！${NC}"
     echo "密钥信息已保存至: $log_file"
+    echo "${RED}请立即备份 $log_file 文件！${NC}"
 }
 
 # 查询密钥信息
