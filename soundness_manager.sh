@@ -154,7 +154,7 @@ check_requirements() {
         need_install=true
     else
         # 验证 soundness-labs 是否可正常执行
-        if ! "$HOME/.soundness/bin/soundness-labs" version &> /dev/null; then
+        if ! "$HOME/.soundness/bin/soundness-labs" account list &> /dev/null; then
             echo -e "${BLUE}soundness-labs 需要重新安装${NC}"
             need_install=true
         fi
@@ -172,7 +172,7 @@ check_requirements() {
     # 最终验证
     if ! command -v expect &> /dev/null || \
        [ ! -x "$HOME/.soundness/bin/soundness-labs" ] || \
-       ! "$HOME/.soundness/bin/soundness-labs" version &> /dev/null; then
+       ! "$HOME/.soundness/bin/soundness-labs" account list &> /dev/null; then
         echo -e "${RED}依赖安装验证失败${NC}"
         return 1
     fi
@@ -253,11 +253,9 @@ generate_keys() {
         return 1
     fi
     
-    # 验证版本
-    if ! "$soundness_labs_path" --version &> /dev/null; then
-        echo -e "${RED}错误：soundness-labs 命令无法执行${NC}"
-        return 1
-    fi
+    # 获取帮助信息以了解正确的命令
+    echo -e "${BLUE}获取命令帮助信息...${NC}"
+    "$soundness_labs_path" --help
     
     # 创建 expect 脚本
     cat > "$tmp_dir/gen_key.exp" << EOF
@@ -266,8 +264,16 @@ set password [lindex \$argv 0]
 set timeout 30
 
 # 生成密钥
-spawn $soundness_labs_path keys add key
+spawn $soundness_labs_path account create
 expect {
+    "Enter password:" {
+        send "\$password\r"
+        exp_continue
+    }
+    "Confirm password:" {
+        send "\$password\r"
+        exp_continue
+    }
     "Enter keyring passphrase:" {
         send "\$password\r"
         exp_continue
@@ -282,6 +288,11 @@ expect {
     }
     eof
 }
+
+# 等待命令完成
+expect eof
+catch wait result
+exit [lindex \$result 3]
 EOF
     
     chmod +x "$tmp_dir/gen_key.exp"
@@ -293,19 +304,39 @@ EOF
             echo -e "${RED}生成第 $i 个密钥时出错${NC}"
             return 1
         fi
-        echo -e "${GREEN}第 $i 个密钥生成成功${NC}"
+        
+        # 验证密钥是否生成成功
+        if "$soundness_labs_path" account list | grep -q "Account"; then
+            echo -e "${GREEN}第 $i 个密钥生成成功${NC}"
+            
+            # 保存密钥信息
+            echo "=== 密钥 #$i 生成时间: $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$KEYS_FILE"
+            "$soundness_labs_path" account list >> "$KEYS_FILE"
+            echo "=================================================" >> "$KEYS_FILE"
+        else
+            echo -e "${RED}无法验证第 $i 个密钥是否生成成功${NC}"
+            return 1
+        fi
     done
     
     return 0
 }
 
-# 显示所有密钥信息
+# 修改 show_keys 函数
 show_keys() {
-    if [ -f "$KEYS_FILE" ]; then
-        echo -e "${BLUE}已保存的密钥信息：${NC}"
-        cat "$KEYS_FILE"
+    local soundness_labs_path="$HOME/.soundness/bin/soundness-labs"
+    
+    if [ -x "$soundness_labs_path" ]; then
+        echo -e "${BLUE}当前账户列表：${NC}"
+        "$soundness_labs_path" account list
+        
+        if [ -f "$KEYS_FILE" ]; then
+            echo -e "\n${BLUE}历史密钥信息：${NC}"
+            cat "$KEYS_FILE"
+        fi
     else
-        echo -e "${RED}未找到已保存的密钥信息${NC}"
+        echo -e "${RED}未找到 soundness-labs 命令${NC}"
+        return 1
     fi
 }
 
