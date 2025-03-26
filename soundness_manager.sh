@@ -107,51 +107,63 @@ install_dependencies() {
     # 清理可能存在的旧安装
     rm -f "$HOME/.soundness/bin/soundness-labs"
     
-    # 安装 soundnessup
-    echo -e "${BLUE}安装 soundnessup...${NC}"
-    curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash
+    # 尝试从官方仓库安装
+    echo -e "${BLUE}尝试从官方仓库安装...${NC}"
     
-    # 确保 PATH 包含 soundness 目录
-    export PATH="$HOME/.soundness/bin:$PATH"
-    source "$HOME/.bashrc"
+    # 克隆仓库
+    if ! git clone https://github.com/soundnesslabs/soundness-layer.git /tmp/soundness-build; then
+        echo -e "${RED}克隆仓库失败${NC}"
+        return 1
+    fi
     
-    # 运行 soundnessup install 并等待完成
-    echo -e "${BLUE}运行 soundnessup install...${NC}"
-    soundnessup install
+    # 进入仓库目录
+    cd /tmp/soundness-build || return 1
     
-    # 等待安装完成
-    echo -e "${BLUE}等待安装完成...${NC}"
-    sleep 10
+    # 检查是否有预编译的二进制文件
+    if [ -f "bin/soundness-labs" ]; then
+        echo -e "${BLUE}找到预编译二进制文件${NC}"
+        cp bin/soundness-labs "$HOME/.soundness/bin/"
+        chmod +x "$HOME/.soundness/bin/soundness-labs"
+    else
+        echo -e "${BLUE}未找到预编译二进制文件，尝试编译...${NC}"
+        
+        # 安装 Rust（如果需要）
+        if ! command -v cargo &> /dev/null; then
+            echo -e "${BLUE}安装 Rust...${NC}"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source "$HOME/.cargo/env"
+        fi
+        
+        # 编译
+        if ! cargo build --release; then
+            echo -e "${RED}编译失败${NC}"
+            cd - > /dev/null
+            rm -rf /tmp/soundness-build
+            return 1
+        fi
+        
+        # 复制编译好的二进制文件
+        cp target/release/soundness-labs "$HOME/.soundness/bin/"
+        chmod +x "$HOME/.soundness/bin/soundness-labs"
+    fi
     
-    # 运行 soundnessup update
-    echo -e "${BLUE}更新 soundness...${NC}"
-    soundnessup update
-    
-    # 再次等待
-    sleep 5
+    # 清理
+    cd - > /dev/null
+    rm -rf /tmp/soundness-build
     
     # 验证安装
     if ! command -v soundness-labs &> /dev/null; then
-        echo -e "${RED}错误：soundness-labs 安装失败${NC}"
-        echo -e "${BLUE}尝试直接下载二进制文件...${NC}"
-        
-        # 尝试直接下载二进制文件
-        curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/bin/soundness-labs -o "$HOME/.soundness/bin/soundness-labs"
-        chmod +x "$HOME/.soundness/bin/soundness-labs"
-        
-        # 最后验证
-        if ! command -v soundness-labs &> /dev/null; then
-            echo -e "${RED}安装失败，请访问 https://github.com/SoundnessLabs/soundness-layer 获取手动安装指南${NC}"
-            return 1
-        fi
+        echo -e "${RED}soundness-labs 安装失败${NC}"
+        return 1
+    fi
+    
+    # 验证可执行性
+    if ! "$HOME/.soundness/bin/soundness-labs" --version; then
+        echo -e "${RED}soundness-labs 无法执行${NC}"
+        return 1
     fi
     
     echo -e "${GREEN}soundness-labs 安装成功${NC}"
-    
-    # 显示版本信息
-    echo -e "${BLUE}当前版本信息：${NC}"
-    soundness-labs version
-    
     return 0
 }
 
@@ -242,52 +254,58 @@ generate_keys() {
     local password=$1
     local count=$2
     
-    # 检查并安装依赖
-    if ! command -v soundness-labs &> /dev/null; then
-        echo "错误：找不到 soundness-labs 命令"
-        echo "正在尝试安装依赖..."
-        install_dependencies
-        
-        # 再次检查命令
-        if ! command -v soundness-labs &> /dev/null; then
-            echo "错误：安装依赖失败，请手动安装 soundness-labs"
-            return 1
-        fi
+    # 验证 soundness-labs 是否正确安装
+    local soundness_labs_path="$HOME/.soundness/bin/soundness-labs"
+    if [ ! -x "$soundness_labs_path" ]; then
+        echo -e "${RED}错误：soundness-labs 未正确安装${NC}"
+        return 1
     fi
     
-    # 获取 soundness-labs 完整路径
-    local soundness_labs_path=$(which soundness-labs)
+    # 验证版本
+    if ! "$soundness_labs_path" --version; then
+        echo -e "${RED}错误：soundness-labs 命令无法执行${NC}"
+        return 1
+    fi
     
-    # 创建 expect 脚本
+    # 创建并测试 expect 脚本
     cat > "$tmp_dir/gen_key.exp" << EOF
 #!/usr/bin/expect -f
 set password [lindex \$argv 0]
-set timeout -1
+set timeout 30
 
-spawn $soundness_labs_path keys add key
-expect "Enter keyring passphrase:"
-send "\$password\r"
-expect "Re-enter keyring passphrase:"
-send "\$password\r"
+# 测试命令
+spawn $soundness_labs_path --version
 expect eof
+
+# 生成密钥
+spawn $soundness_labs_path keys add key
+expect {
+    "Enter keyring passphrase:" {
+        send "\$password\r"
+        exp_continue
+    }
+    "Re-enter keyring passphrase:" {
+        send "\$password\r"
+        exp_continue
+    }
+    timeout {
+        puts "错误：操作超时"
+        exit 1
+    }
+    eof
+}
 EOF
     
-    # 设置执行权限
     chmod +x "$tmp_dir/gen_key.exp"
     
-    # 生成指定数量的密钥
+    # 生成密钥
     for ((i=1; i<=$count; i++)); do
-        echo "正在生成第 $i 个密钥..."
-        
-        # 使用完整路径执行 expect 脚本
-        /usr/bin/expect "$tmp_dir/gen_key.exp" "$password"
-        
-        if [ $? -ne 0 ]; then
-            echo "生成第 $i 个密钥时出错"
+        echo -e "${BLUE}正在生成第 $i 个密钥...${NC}"
+        if ! /usr/bin/expect "$tmp_dir/gen_key.exp" "$password"; then
+            echo -e "${RED}生成第 $i 个密钥时出错${NC}"
             return 1
         fi
-        
-        echo "第 $i 个密钥生成成功"
+        echo -e "${GREEN}第 $i 个密钥生成成功${NC}"
     done
     
     return 0
