@@ -140,6 +140,15 @@ query_keys() {
     fi
 }
 
+# 检查 Soundness CLI 是否已安装
+check_soundness_installed() {
+    if command -v soundness-cli &> /dev/null && command -v soundnessup &> /dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # 主流程
 main() {
     if [ "$1" = "query" ]; then
@@ -147,9 +156,15 @@ main() {
         return
     fi
     
-    check_system
-    install_rust
-    install_soundness
+    # 只在首次安装时执行安装步骤
+    if ! check_soundness_installed; then
+        echo "${GREEN}首次运行，开始安装必要组件...${NC}"
+        check_system
+        install_rust
+        install_soundness
+    else
+        echo "${GREEN}Soundness CLI 已安装，跳过安装步骤...${NC}"
+    fi
     
     # 检查是否传入了生成密钥数量参数
     if [ -n "$1" ] && [ "$1" -gt 0 ] 2>/dev/null; then
