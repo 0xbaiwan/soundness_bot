@@ -340,31 +340,28 @@ generate_keys() {
         local key_name="${random_word}_${random_num}"
         local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
         
-        # 创建 expect 脚本
-        cat > "$exp_script" << EOF
+        # 创建并执行 expect 脚本
+        cat > "$exp_script" << 'EOF'
 #!/usr/bin/expect -f
 set timeout -1
-log_user 1
-spawn soundness-cli generate-key --name "$key_name"
-expect {
-    "Enter password for secret key: " {
-        send "$password\r"
-        exp_continue
-    }
-    "Confirm password: " {
-        send "$password\r"
-        exp_continue
-    }
-    timeout {
-        puts "Operation timed out"
-        exit 1
-    }
-    eof
-}
+
+# 获取参数
+set password [lindex $argv 0]
+set key_name [lindex $argv 1]
+
+spawn soundness-cli generate-key --name $key_name
+expect "Enter password for secret key: "
+send "$password\r"
+expect "Confirm password: "
+send "$password\r"
+expect eof
 EOF
         
+        # 设置执行权限
         chmod 700 "$exp_script"
-        output=$("$exp_script")
+        
+        # 执行 expect 脚本
+        output=$(expect "$exp_script" "$password" "$key_name")
         status=$?
         
         if [ $status -ne 0 ]; then
