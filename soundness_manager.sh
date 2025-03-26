@@ -11,7 +11,13 @@ export SCRIPT_RUNNING=1
 
 # 开启严格模式
 set -euo pipefail
+set -o monitor  # 确保子进程也被终止
 umask 077  # 设置文件权限
+
+# 确保 HOME 变量存在
+if [ -z "${HOME:-}" ]; then
+    export HOME=$(eval echo ~$USER)
+fi
 
 # 存储密钥信息的文件
 KEYS_FILE="$HOME/.soundness_keys.txt"
@@ -21,6 +27,21 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
+
+# 安全的文件写入函数
+safe_write() {
+    local file=$1
+    local temp_file="${file}.tmp"
+    
+    # 将输入写入临时文件
+    cat > "$temp_file"
+    
+    # 设置正确的权限
+    chmod 600 "$temp_file"
+    
+    # 安全地移动文件
+    mv "$temp_file" "$file"
+}
 
 # 添加文件权限检查
 check_file_permissions() {
@@ -35,6 +56,9 @@ check_file_permissions() {
 
 # 加载环境变量
 load_env() {
+    # 确保基础目录存在
+    mkdir -p "$HOME/.soundness/bin" "$HOME/.cargo/bin"
+    
     # 加载 Cargo 环境
     if [ -f "$HOME/.cargo/env" ]; then
         # shellcheck source=/dev/null
@@ -48,10 +72,28 @@ load_env() {
     if [[ ":$PATH:" != *":$HOME/.soundness/bin:"* ]]; then
         export PATH="$HOME/.soundness/bin:$PATH"
     fi
+    
+    # 验证环境变量加载
+    if [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]] || [[ ":$PATH:" != *":$HOME/.soundness/bin:"* ]]; then
+        echo -e "${RED}环境变量设置失败${NC}"
+        return 1
+    fi
 }
 
 # 安装依赖
 install_dependencies() {
+    # 确保有 sudo 权限
+    if ! sudo -v; then
+        echo -e "${RED}需要 sudo 权限来安装依赖${NC}"
+        return 1
+    fi
+    
+    # 确保网络连接
+    if ! ping -c 1 google.com &> /dev/null && ! ping -c 1 baidu.com &> /dev/null; then
+        echo -e "${RED}网络连接异常，请检查网络${NC}"
+        return 1
+    fi
+    
     echo -e "${BLUE}正在安装必要组件...${NC}"
     
     # 安装 expect
@@ -82,23 +124,8 @@ install_dependencies() {
     }
     
     # 更新环境变量
-    load_env
+    load_env || return 1
     
-    # 添加环境变量到 .bashrc（如果不存在）
-    {
-        echo 'export PATH="$HOME/.soundness/bin:$PATH"'
-        echo 'export PATH="$HOME/.cargo/bin:$PATH"'
-    } >> "$HOME/.bashrc.tmp"
-    
-    # 安全地更新 .bashrc
-    if [ -f "$HOME/.bashrc.tmp" ]; then
-        # 移除已存在的相同行
-        grep -v "export PATH.*soundness/bin\|export PATH.*cargo/bin" "$HOME/.bashrc" > "$HOME/.bashrc.new" || true
-        cat "$HOME/.bashrc.tmp" >> "$HOME/.bashrc.new"
-        mv "$HOME/.bashrc.new" "$HOME/.bashrc"
-        rm -f "$HOME/.bashrc.tmp"
-    fi
-
     # 安装和更新 soundness
     echo -e "${GREEN}安装和更新 soundness...${NC}"
     
@@ -120,6 +147,15 @@ install_dependencies() {
         echo -e "${RED}soundness 更新失败${NC}"
         return 1
     }
+    
+    # 验证所有组件
+    local all_deps=("expect" "cargo" "soundness-cli" "soundnessup")
+    for dep in "${all_deps[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            echo -e "${RED}${dep} 安装失败${NC}"
+            return 1
+        fi
+    done
 
     echo -e "${GREEN}依赖安装完成！${NC}"
     return 0
@@ -129,25 +165,14 @@ install_dependencies() {
 check_requirements() {
     local need_install=false
     
-    # 检查 expect
-    if ! command -v expect &> /dev/null; then
-        need_install=true
-    fi
-    
-    # 检查 cargo
-    if ! command -v cargo &> /dev/null; then
-        need_install=true
-    fi
-    
-    # 检查 soundness-cli
-    if ! command -v soundness-cli &> /dev/null; then
-        need_install=true
-    fi
-    
-    # 检查 soundnessup
-    if ! command -v soundnessup &> /dev/null; then
-        need_install=true
-    fi
+    # 检查所有依赖
+    local all_deps=("expect" "cargo" "soundness-cli" "soundnessup")
+    for dep in "${all_deps[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            need_install=true
+            break
+        fi
+    done
     
     # 如果需要安装任何组件
     if [ "$need_install" = true ]; then
@@ -156,26 +181,12 @@ check_requirements() {
         
         # 验证安装结果
         local failed=false
-        
-        if ! command -v expect &> /dev/null; then
-            echo -e "${RED}expect 安装失败${NC}"
-            failed=true
-        fi
-        
-        if ! command -v cargo &> /dev/null; then
-            echo -e "${RED}Rust/Cargo 安装失败${NC}"
-            failed=true
-        fi
-        
-        if ! command -v soundness-cli &> /dev/null; then
-            echo -e "${RED}soundness-cli 安装失败${NC}"
-            failed=true
-        fi
-        
-        if ! command -v soundnessup &> /dev/null; then
-            echo -e "${RED}soundnessup 安装失败${NC}"
-            failed=true
-        fi
+        for dep in "${all_deps[@]}"; do
+            if ! command -v "$dep" &> /dev/null; then
+                echo -e "${RED}${dep} 安装失败${NC}"
+                failed=true
+            fi
+        done
         
         if [ "$failed" = true ]; then
             echo -e "${RED}部分组件安装失败，请尝试手动安装：${NC}"
@@ -211,6 +222,24 @@ generate_keys() {
     echo -n "请输入密码: "
     read -s password
     echo
+    
+    # 验证密码不为空
+    if [ -z "$password" ]; then
+        echo -e "${RED}密码不能为空${NC}"
+        return 1
+    fi
+    
+    # 创建临时目录
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    if [ ! -d "$tmp_dir" ]; then
+        echo -e "${RED}无法创建临时目录${NC}"
+        return 1
+    fi
+
+    # 使用临时目录
+    local exp_script="$tmp_dir/gen_key.exp"
+    local success=true
 
     for ((i=1; i<=count; i++)); do
         echo -e "${GREEN}正在生成第 $i 个密钥...${NC}"
@@ -221,20 +250,37 @@ generate_keys() {
         local key_name="${random_word}_${random_num}"
         local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
         
-        # 生成密钥并捕获输出
-        # 使用 expect 模式来自动处理密码输入
-        output=$(expect -c "
-            spawn soundness-cli generate-key --name \"$key_name\"
-            expect \"Enter password for secret key: \"
-            send \"$password\r\"
-            expect \"Confirm password: \"
-            send \"$password\r\"
-            expect eof
-            " 2>&1)
+        # 创建 expect 脚本
+        cat > "$exp_script" << EOF
+#!/usr/bin/expect -f
+set timeout -1
+log_user 1
+spawn soundness-cli generate-key --name "$key_name"
+expect {
+    "Enter password for secret key: " {
+        send "$password\r"
+        exp_continue
+    }
+    "Confirm password: " {
+        send "$password\r"
+        exp_continue
+    }
+    timeout {
+        puts "Operation timed out"
+        exit 1
+    }
+    eof
+}
+EOF
         
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}生成密钥失败，请确保 soundness-cli 已正确安装${NC}"
-            return 1
+        chmod 700 "$exp_script"
+        output=$("$exp_script")
+        status=$?
+        
+        if [ $status -ne 0 ]; then
+            echo -e "${RED}生成密钥失败: $output${NC}"
+            success=false
+            break
         fi
         
         # 提取公钥和助记词
@@ -244,7 +290,8 @@ generate_keys() {
         # 更严格的输出验证
         if [ -z "$public_key" ] || [ -z "$mnemonic" ]; then
             echo -e "${RED}无法提取密钥信息，请重试${NC}"
-            return 1
+            success=false
+            break
         fi
         
         # 保存到文件
@@ -261,6 +308,11 @@ generate_keys() {
         echo -e "${GREEN}第 $i 个密钥生成完成${NC}"
         echo "------------------------"
     done
+    
+    # 清理临时目录
+    rm -rf "$tmp_dir"
+    
+    [ "$success" = true ] || return 1
 }
 
 # 显示所有密钥信息
@@ -273,12 +325,27 @@ show_keys() {
     fi
 }
 
-# 添加备份函数
+# 备份密钥文件
 backup_keys() {
     if [ -f "$KEYS_FILE" ]; then
-        backup_file="$KEYS_FILE.$(date +%Y%m%d_%H%M%S).bak"
-        cp "$KEYS_FILE" "$backup_file"
-        echo -e "${GREEN}已创建备份: $backup_file${NC}"
+        local backup_dir="$HOME/.soundness_backups"
+        mkdir -p "$backup_dir"
+        chmod 700 "$backup_dir"
+        
+        local backup_file="$backup_dir/keys_$(date +%Y%m%d_%H%M%S).bak"
+        if cp "$KEYS_FILE" "$backup_file"; then
+            chmod 600 "$backup_file"
+            echo -e "${GREEN}已创建备份: $backup_file${NC}"
+            
+            # 清理旧备份（保留最近10个）
+            ls -t "$backup_dir"/*.bak | tail -n +11 | xargs rm -f 2>/dev/null || true
+        else
+            echo -e "${RED}备份创建失败${NC}"
+            return 1
+        fi
+    else
+        echo -e "${RED}未找到密钥文件${NC}"
+        return 1
     fi
 }
 
@@ -332,28 +399,48 @@ show_menu() {
     done
 }
 
-# 添加清理函数
+# 清理函数
 cleanup() {
-    # 清理临时文件
-    rm -f /tmp/soundness_*.tmp 2>/dev/null || true
+    # 清理所有相关临时文件和目录
+    rm -rf /tmp/soundness_*.tmp /tmp/gen_key.exp 2>/dev/null || true
     
-    # 重置终端颜色
+    # 重置终端状态
+    stty echo
     echo -e "${NC}"
 }
 
 # 添加信号处理
 trap cleanup EXIT
-trap 'echo -e "${RED}脚本被中断${NC}"; exit 1' INT TERM
+trap 'echo -e "${RED}脚本被中断${NC}"; cleanup; exit 1' INT TERM HUP
 
 # 主程序入口
 main() {
-    check_file_permissions
+    # 检查系统兼容性
+    if [ "$(uname)" != "Linux" ]; then
+        echo -e "${RED}此脚本仅支持 Linux 系统${NC}"
+        exit 1
+    }
     
-    # 确保密钥文件存在
-    touch "$KEYS_FILE"
+    # 检查必要命令
+    for cmd in curl grep awk chmod mkdir rm; do
+        if ! command -v "$cmd" &> /dev/null; then
+            echo -e "${RED}缺少必要命令: $cmd${NC}"
+            exit 1
+        fi
+    done
+    
+    # 初始化
+    check_file_permissions
+    touch "$KEYS_FILE" || {
+        echo -e "${RED}无法创建密钥文件${NC}"
+        exit 1
+    }
     
     # 加载环境变量
-    load_env
+    load_env || {
+        echo -e "${RED}环境变量设置失败${NC}"
+        exit 1
+    }
     
     # 运行菜单
     show_menu
