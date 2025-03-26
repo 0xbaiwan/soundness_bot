@@ -79,8 +79,18 @@ generate_key() {
     # 执行生成命令并捕获输出
     local output
     if [ -n "$password" ]; then
-        # 使用提供的密码（批量模式下的后续密钥）
-        output=$(printf "%s\n%s\n" "$password" "$password" | soundness-cli generate-key --name "$key_name" 2>&1)
+        # 使用expect自动处理密码输入
+        output=$(expect -c "
+            set timeout 10
+            spawn soundness-cli generate-key --name \"$key_name\"
+            expect \"Enter password for secret key:\"
+            send \"$password\r\"
+            expect \"Confirm password:\"
+            send \"$password\r\"
+            expect eof
+            catch wait result
+            exit [lindex \$result 3]
+        " 2>&1)
     else
         # 正常生成（单个模式或批量模式的第一个密钥）
         output=$(soundness-cli generate-key --name "$key_name" 2>&1)
@@ -110,6 +120,15 @@ generate_key() {
     fi
     
     return $status
+}
+
+# 检查并安装expect
+install_expect() {
+    if ! command -v expect &> /dev/null; then
+        echo "正在安装 expect..."
+        sudo apt-get update
+        sudo apt-get install -y expect
+    fi
 }
 
 # 批量生成密钥
@@ -231,6 +250,9 @@ main() {
     else
         echo "${GREEN}Soundness CLI 已安装，跳过安装步骤...${NC}"
     fi
+    
+    # 确保expect已安装
+    install_expect
     
     # 检查是否传入了生成密钥数量参数
     if [ -n "$1" ] && [ "$1" -gt 0 ] 2>/dev/null; then
