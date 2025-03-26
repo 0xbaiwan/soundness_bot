@@ -1,15 +1,17 @@
 #!/bin/bash
-set -euo pipefail  # 严格模式
-umask 077  # 设置文件权限
 
-# 初始化 SCRIPT_RUNNING 变量
-SCRIPT_RUNNING=${SCRIPT_RUNNING:-}
+# 关闭未绑定变量的错误检查，仅对脚本开头部分
+set +u
 
 # 防止重复执行
 if [ -n "${SCRIPT_RUNNING:-}" ]; then
     exit 0
 fi
 export SCRIPT_RUNNING=1
+
+# 开启严格模式
+set -euo pipefail
+umask 077  # 设置文件权限
 
 # 存储密钥信息的文件
 KEYS_FILE="$HOME/.soundness_keys.txt"
@@ -31,53 +33,87 @@ check_file_permissions() {
     fi
 }
 
-# 添加进度显示函数
-show_progress() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='|/-\'
-    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
-        local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
+# 加载环境变量
+load_env() {
+    # 加载 Cargo 环境
+    if [ -f "$HOME/.cargo/env" ]; then
+        # shellcheck source=/dev/null
+        source "$HOME/.cargo/env"
+    fi
+    
+    # 设置 PATH（确保不重复添加）
+    if [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
+        export PATH="$HOME/.cargo/bin:$PATH"
+    fi
+    if [[ ":$PATH:" != *":$HOME/.soundness/bin:"* ]]; then
+        export PATH="$HOME/.soundness/bin:$PATH"
+    fi
 }
 
 # 安装依赖
 install_dependencies() {
     echo -e "${BLUE}正在安装必要组件...${NC}"
-    (
-        # 检查并安装 Rust
-        if ! command -v cargo &> /dev/null; then
-            echo -e "${GREEN}安装 Rust...${NC}"
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source "$HOME/.cargo/env"
-        fi
+    
+    # 检查并安装 Rust
+    if ! command -v cargo &> /dev/null; then
+        echo -e "${GREEN}安装 Rust...${NC}"
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || {
+            echo -e "${RED}Rust 安装失败${NC}"
+            return 1
+        }
+        # shellcheck source=/dev/null
+        source "$HOME/.cargo/env"
+    fi
 
-        # 安装 soundness-cli
-        echo -e "${GREEN}安装 soundness-cli...${NC}"
-        curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash
-        export PATH="$HOME/.soundness/bin:$PATH"
-        source "$HOME/.bashrc"
-        soundnessup install
-        soundnessup update
+    # 安装 soundness-cli
+    echo -e "${GREEN}安装 soundness-cli...${NC}"
+    curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash || {
+        echo -e "${RED}soundness-cli 安装失败${NC}"
+        return 1
+    }
+    
+    # 更新环境变量
+    load_env
+    
+    # 添加环境变量到 .bashrc（如果不存在）
+    {
+        echo 'export PATH="$HOME/.soundness/bin:$PATH"'
+        echo 'export PATH="$HOME/.cargo/bin:$PATH"'
+    } >> "$HOME/.bashrc.tmp"
+    
+    # 安全地更新 .bashrc
+    if [ -f "$HOME/.bashrc.tmp" ]; then
+        # 移除已存在的相同行
+        grep -v "export PATH.*soundness/bin\|export PATH.*cargo/bin" "$HOME/.bashrc" > "$HOME/.bashrc.new" || true
+        cat "$HOME/.bashrc.tmp" >> "$HOME/.bashrc.new"
+        mv "$HOME/.bashrc.new" "$HOME/.bashrc"
+        rm -f "$HOME/.bashrc.tmp"
+    fi
 
-        # 添加环境变量到 .bashrc 如果不存在
-        if ! grep -q "PATH=\"\$HOME/.soundness/bin:\$PATH\"" "$HOME/.bashrc"; then
-            echo 'export PATH="$HOME/.soundness/bin:$PATH"' >> "$HOME/.bashrc"
+    # 安装和更新 soundness
+    echo -e "${GREEN}安装和更新 soundness...${NC}"
+    
+    # 尝试多次安装（有时候第一次可能失败）
+    for i in {1..3}; do
+        if soundnessup install; then
+            break
+        elif [ "$i" -eq 3 ]; then
+            echo -e "${RED}soundness 安装失败，已重试 3 次${NC}"
+            return 1
+        else
+            echo -e "${BLUE}安装失败，正在重试 ($i/3)...${NC}"
+            sleep 2
         fi
-        if ! grep -q "PATH=\"\$HOME/.cargo/bin:\$PATH\"" "$HOME/.bashrc"; then
-            echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$HOME/.bashrc"
-        fi
+    done
 
-        # 等待安装完成
-        sleep 2
-        echo -e "${GREEN}依赖安装完成！${NC}"
-    ) &
-    show_progress $!
+    # 更新 soundness
+    soundnessup update || {
+        echo -e "${RED}soundness 更新失败${NC}"
+        return 1
+    }
+
+    echo -e "${GREEN}依赖安装完成！${NC}"
+    return 0
 }
 
 # 检查必要的命令是否安装
@@ -85,11 +121,16 @@ check_requirements() {
     if ! command -v soundness-cli &> /dev/null; then
         echo -e "${BLUE}检测到未安装必要组件，开始安装...${NC}"
         install_dependencies
-        # 重新加载环境变量
-        source "$HOME/.bashrc"
-        export PATH="$HOME/.soundness/bin:$PATH"
+        
+        # 验证安装结果
         if ! command -v soundness-cli &> /dev/null; then
-            echo -e "${RED}安装失败，请手动安装依赖${NC}"
+            echo -e "${RED}安装失败，请尝试手动安装：${NC}"
+            echo "1. curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            echo "2. source \$HOME/.cargo/env"
+            echo "3. curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
+            echo "4. source ~/.bashrc"
+            echo "5. soundnessup install"
+            echo "6. soundnessup update"
             exit 1
         fi
     fi
@@ -114,6 +155,7 @@ generate_keys() {
     for ((i=1; i<=count; i++)); do
         echo -e "${GREEN}正在生成第 $i 个密钥...${NC}"
         local key_name="soundness_key_$i"
+        local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
         
         # 生成密钥并捕获输出
         output=$(soundness-cli generate-key --name "$key_name" 2>&1)
@@ -133,15 +175,16 @@ generate_keys() {
             return 1
         fi
         
-        # 保存到文件
-        echo "Key $i:" >> "$KEYS_FILE"
-        echo "Name: $key_name" >> "$KEYS_FILE"
-        echo "Public Key: $public_key" >> "$KEYS_FILE"
-        echo "Mnemonic: $mnemonic" >> "$KEYS_FILE"
-        echo "------------------------" >> "$KEYS_FILE"
-        
-        # 添加时间戳
-        echo "Generated at: $(date '+%Y-%m-%d %H:%M:%S')" >> "$KEYS_FILE"
+        # 保存到文件（时间戳放在开头）
+        {
+            echo "------------------------"
+            echo "Generated at: $timestamp"
+            echo "Key $i:"
+            echo "Name: $key_name"
+            echo "Public Key: $public_key"
+            echo "Mnemonic: $mnemonic"
+            echo "------------------------"
+        } >> "$KEYS_FILE"
         
         echo -e "${GREEN}第 $i 个密钥生成完成${NC}"
         echo "------------------------"
@@ -222,11 +265,12 @@ trap 'echo -e "${RED}脚本被中断${NC}"; exit 1' INT TERM
 # 主程序入口
 main() {
     check_file_permissions
+    
     # 确保密钥文件存在
     touch "$KEYS_FILE"
     
-    # 设置环境变量
-    export PATH="$HOME/.cargo/bin:$HOME/.soundness/bin:$PATH"
+    # 加载环境变量
+    load_env
     
     # 运行菜单
     show_menu
