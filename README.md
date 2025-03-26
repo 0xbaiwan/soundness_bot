@@ -7,8 +7,17 @@
 复制以下命令到终端运行即可：
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/0xbaiwan/soundness_bot/main/soundness_manager.sh > /tmp/soundness_manager.sh && bash /tmp/soundness_manager.sh
+# 下载并执行脚本
+curl -sSL https://raw.githubusercontent.com/0xbaiwan/soundness_bot/main/soundness_manager.sh > /tmp/soundness_manager.sh && \
+chmod +x /tmp/soundness_manager.sh && \
+/tmp/soundness_manager.sh
 ```
+
+脚本会自动：
+1. 检查并安装必要的依赖
+2. 清理可能存在的旧安装
+3. 配置正确的环境变量
+4. 提供交互式菜单进行操作
 
 ## 功能特点
 
