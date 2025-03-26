@@ -75,10 +75,18 @@ generate_key() {
     echo "=== Key: $key_name ===" >> "$log_file"
     echo "----------------------------------------" >> "$log_file"
     
-    # 执行生成命令并捕获输出
+    # 使用expect自动处理密码输入
     local output
-    # 使用两个换行符（相当于两次回车）
-    output=$(printf "\n\n" | soundness-cli generate-key --name "$key_name" 2>&1)
+    output=$(expect -c "
+        set timeout 10
+        spawn soundness-cli generate-key --name \"$key_name\"
+        expect \"Enter password for secret key:\"
+        send \"\r\"
+        expect \"Confirm password:\"
+        send \"\r\"
+        expect eof
+        catch wait result
+    " 2>&1)
     local status=$?
     
     # 保存输出到日志
