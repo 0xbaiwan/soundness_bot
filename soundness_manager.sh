@@ -2,8 +2,11 @@
 set -euo pipefail  # 严格模式
 umask 077  # 设置文件权限
 
+# 初始化 SCRIPT_RUNNING 变量
+SCRIPT_RUNNING=${SCRIPT_RUNNING:-}
+
 # 防止重复执行
-if [ -n "$SCRIPT_RUNNING" ]; then
+if [ -n "${SCRIPT_RUNNING:-}" ]; then
     exit 0
 fi
 export SCRIPT_RUNNING=1
