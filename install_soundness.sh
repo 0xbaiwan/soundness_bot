@@ -59,7 +59,6 @@ generate_key() {
     local key_name=$1
     local log_file=$2
     local is_batch=$3
-    local password=$4  # 新增密码参数
     
     echo "${GREEN}正在生成密钥 ${key_name}...${NC}"
     
@@ -78,23 +77,8 @@ generate_key() {
     
     # 执行生成命令并捕获输出
     local output
-    if [ -n "$password" ]; then
-        # 使用expect自动处理密码输入
-        output=$(expect -c "
-            set timeout 10
-            spawn soundness-cli generate-key --name \"$key_name\"
-            expect \"Enter password for secret key:\"
-            send \"$password\r\"
-            expect \"Confirm password:\"
-            send \"$password\r\"
-            expect eof
-            catch wait result
-            exit [lindex \$result 3]
-        " 2>&1)
-    else
-        # 正常生成（单个模式或批量模式的第一个密钥）
-        output=$(soundness-cli generate-key --name "$key_name" 2>&1)
-    fi
+    # 使用两个换行符（相当于两次回车）
+    output=$(printf "\n\n" | soundness-cli generate-key --name "$key_name" 2>&1)
     local status=$?
     
     # 保存输出到日志
@@ -105,8 +89,8 @@ generate_key() {
     # 显示结果
     if [ $status -eq 0 ]; then
         echo "${GREEN}✓ 密钥 $key_name 生成成功${NC}"
-        if [ -z "$password" ]; then
-            echo "$output"  # 只在没有提供密码时显示输出
+        if [ -z "$is_batch" ]; then
+            echo "$output"  # 只在单个生成时显示输出
         fi
     else
         echo "${RED}✗ 密钥 $key_name 生成失败${NC}"
@@ -135,7 +119,7 @@ install_expect() {
 generate_multiple_keys() {
     local count=$1
     echo "正在批量生成 ${count} 个密钥..."
-    echo "${RED}注意：请务必保存第一个密钥的助记词和密码！${NC}"
+    echo "${RED}注意：所有密钥将使用空密码生成，请务必保存助记词！${NC}"
     
     # 创建日志目录和文件
     mkdir -p ./soundness_keys
@@ -148,26 +132,11 @@ generate_multiple_keys() {
     echo "" >> "$log_file"
     
     local success_count=0
-    local first_key_name=$(generate_random_name)
-    local password=""
     
-    # 生成第一个密钥并获取密码
-    echo "${GREEN}生成第一个密钥，请输入密码...${NC}"
-    generate_key "$first_key_name" "$log_file" "batch"
-    if [ $? -eq 0 ]; then
-        ((success_count++))
-        # 提取第一个密钥的密码
-        read -s -p "请再次输入刚才设置的密码（用于后续密钥生成）: " password
-        echo
-    else
-        echo "${RED}第一个密钥生成失败，终止批量生成${NC}"
-        return 1
-    fi
-    
-    # 生成剩余的密钥
-    for i in $(seq 2 $count); do
+    # 生成所有密钥
+    for i in $(seq 1 $count); do
         local key_name=$(generate_random_name)
-        generate_key "$key_name" "$log_file" "batch" "$password"
+        generate_key "$key_name" "$log_file" "batch"
         
         if [ $? -eq 0 ]; then
             ((success_count++))
