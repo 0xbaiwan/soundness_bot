@@ -140,29 +140,44 @@ install_dependencies() {
 # 检查必要的命令是否安装
 check_requirements() {
     echo -e "${BLUE}检查依赖项...${NC}"
+    local need_install=false
     
     # 检查 expect
     if ! command -v expect &> /dev/null; then
         echo -e "${BLUE}需要安装 expect${NC}"
-        install_dependencies
-        return $?
+        need_install=true
     fi
     
     # 检查 soundness-labs
     if [ ! -x "$HOME/.soundness/bin/soundness-labs" ]; then
         echo -e "${BLUE}需要安装 soundness-labs${NC}"
-        install_dependencies
-        return $?
+        need_install=true
+    else
+        # 验证 soundness-labs 是否可正常执行
+        if ! "$HOME/.soundness/bin/soundness-labs" version &> /dev/null; then
+            echo -e "${BLUE}soundness-labs 需要重新安装${NC}"
+            need_install=true
+        fi
     fi
     
-    # 验证 soundness-labs 是否可执行
-    if ! "$HOME/.soundness/bin/soundness-labs" --version &> /dev/null; then
-        echo -e "${BLUE}soundness-labs 需要重新安装${NC}"
-        install_dependencies
-        return $?
+    # 如果需要安装
+    if [ "$need_install" = true ]; then
+        echo -e "${BLUE}开始安装依赖...${NC}"
+        if ! install_dependencies; then
+            echo -e "${RED}依赖安装失败${NC}"
+            return 1
+        fi
     fi
     
-    echo -e "${GREEN}所有依赖已安装${NC}"
+    # 最终验证
+    if ! command -v expect &> /dev/null || \
+       [ ! -x "$HOME/.soundness/bin/soundness-labs" ] || \
+       ! "$HOME/.soundness/bin/soundness-labs" version &> /dev/null; then
+        echo -e "${RED}依赖安装验证失败${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}所有依赖已正确安装${NC}"
     return 0
 }
 
@@ -326,39 +341,67 @@ backup_keys() {
 # 添加初始化函数
 initialize_environment() {
     echo -e "${BLUE}正在初始化环境...${NC}"
+    local need_init=false
     
-    # 创建必要的目录
-    mkdir -p "$HOME/.soundness/bin" "$HOME/.soundness/logs"
+    # 检查必要目录
+    if [ ! -d "$HOME/.soundness/bin" ] || [ ! -d "$HOME/.soundness/logs" ]; then
+        need_init=true
+        echo -e "${BLUE}创建必要目录...${NC}"
+        mkdir -p "$HOME/.soundness/bin" "$HOME/.soundness/logs"
+    fi
     
-    # 检查并安装基本依赖
+    # 检查基本工具
     if ! command -v curl &> /dev/null; then
+        need_init=true
         echo -e "${BLUE}安装 curl...${NC}"
-        sudo apt-get update && sudo apt-get install -y curl || {
+        if ! sudo apt-get update && sudo apt-get install -y curl; then
             echo -e "${RED}curl 安装失败${NC}"
             return 1
-        }
+        fi
     fi
     
-    # 安装 expect
+    # 检查 expect
     if ! command -v expect &> /dev/null; then
+        need_init=true
         echo -e "${BLUE}安装 expect...${NC}"
-        sudo apt-get install -y expect || {
+        if ! sudo apt-get install -y expect; then
             echo -e "${RED}expect 安装失败${NC}"
             return 1
-        }
+        fi
     fi
     
-    # 设置正确的权限
-    chmod 700 "$HOME/.soundness"
-    chmod 700 "$HOME/.soundness/bin"
+    # 检查目录权限
+    local perms
+    perms=$(stat -c "%a" "$HOME/.soundness" 2>/dev/null || echo "000")
+    if [ "$perms" != "700" ]; then
+        need_init=true
+        echo -e "${BLUE}设置目录权限...${NC}"
+        chmod 700 "$HOME/.soundness"
+        chmod 700 "$HOME/.soundness/bin"
+    fi
     
-    # 更新 PATH
+    # 检查 PATH 设置
     if [[ ":$PATH:" != *":$HOME/.soundness/bin:"* ]]; then
+        need_init=true
+        echo -e "${BLUE}更新 PATH 环境变量...${NC}"
         echo "export PATH=\"\$HOME/.soundness/bin:\$PATH\"" >> "$HOME/.bashrc"
         export PATH="$HOME/.soundness/bin:$PATH"
     fi
     
-    echo -e "${GREEN}环境初始化完成${NC}"
+    if [ "$need_init" = true ]; then
+        echo -e "${GREEN}环境初始化完成${NC}"
+    else
+        echo -e "${GREEN}环境已经初始化${NC}"
+    fi
+    
+    # 最终验证
+    if [ ! -d "$HOME/.soundness/bin" ] || [ ! -d "$HOME/.soundness/logs" ] || \
+       ! command -v curl &> /dev/null || ! command -v expect &> /dev/null || \
+       [ "$(stat -c "%a" "$HOME/.soundness")" != "700" ]; then
+        echo -e "${RED}环境初始化验证失败${NC}"
+        return 1
+    fi
+    
     return 0
 }
 
