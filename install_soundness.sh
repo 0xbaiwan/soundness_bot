@@ -80,7 +80,7 @@ generate_key() {
     local output
     if [ -n "$password" ]; then
         # 使用提供的密码（批量模式下的后续密钥）
-        output=$(echo "$password" | soundness-cli generate-key --name "$key_name" 2>&1)
+        output=$(printf "%s\n%s\n" "$password" "$password" | soundness-cli generate-key --name "$key_name" 2>&1)
     else
         # 正常生成（单个模式或批量模式的第一个密钥）
         output=$(soundness-cli generate-key --name "$key_name" 2>&1)
