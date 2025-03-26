@@ -28,6 +28,10 @@ LOG_FILE="$HOME/.soundness/soundness.log"
 # 添加配置文件支持
 CONFIG_FILE="$HOME/.soundness/config"
 
+# 在脚本开始处添加 tmp_dir 的定义
+tmp_dir=$(mktemp -d /tmp/soundness.XXXXXXXXXX)
+trap 'rm -rf "$tmp_dir"' EXIT
+
 log_message() {
     local level=$1
     local message=$2
@@ -277,148 +281,40 @@ retry_command() {
     return 1
 }
 
-# 生成并保存密钥
+# 修改生成密钥的函数
 generate_keys() {
-    log_message "INFO" "开始生成密钥，数量: $1"
-    local count=$1
-    local words=("apple" "banana" "cherry" "dragon" "eagle" "falcon" "grape" "horse" "island" "jaguar" "koala" "lemon" "mango" "ninja" "orange" "panda" "queen" "rabbit" "snake" "tiger" "umbrella" "violet" "whale" "xenon" "yellow" "zebra")
-    local password
+    local password=$1
+    local count=$2
     
-    # 检查磁盘空间
-    if [ "$(df -P "$HOME" | awk 'NR==2 {print $4}')" -lt 1048576 ]; then
-        echo -e "${RED}磁盘空间不足，请确保有至少 1GB 可用空间${NC}"
-        return 1
-    fi
-
-    # 获取并验证密码
-    while true; do
-        echo -n "请输入密码: "
-        read -s password
-        echo
-        
-        if [ -z "$password" ]; then
-            echo -e "${RED}密码不能为空${NC}"
-            continue
-        fi
-        
-        if ! check_password_strength "$password"; then
-            continue
-        fi
-        
-        echo -n "请确认密码: "
-        read -s password_confirm
-        echo
-        
-        if [ "$password" != "$password_confirm" ]; then
-            echo -e "${RED}两次输入的密码不一致${NC}"
-            continue
-        fi
-        
-        break
-    done
-    
-    # 创建临时目录（使用更安全的方式）
-    local tmp_dir
-    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/soundness.XXXXXXXXXX") || {
-        echo -e "${RED}无法创建临时目录${NC}"
-        return 1
-    }
-    
-    # 确保退出时清理临时目录
-    trap 'rm -rf "$tmp_dir"' EXIT
-
-    # 使用临时目录
-    local exp_script="$tmp_dir/gen_key.exp"
-    local success=true
-
-    for ((i=1; i<=count; i++)); do
-        echo -e "${GREEN}正在生成第 $i 个密钥...${NC}"
-        
-        # 生成随机密钥名称
-        local random_word=${words[$RANDOM % ${#words[@]}]}
-        local random_num=$((RANDOM % 10000))
-        local key_name="${random_word}_${random_num}"
-        local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-        
-        # 创建并执行 expect 脚本
-        cat > "$exp_script" << 'EOF'
+    # 创建 expect 脚本
+    cat > "$tmp_dir/gen_key.exp" << 'EOF'
 #!/usr/bin/expect -f
+set password [lindex $argv 0]
 set timeout -1
 
-# 获取参数
-set password [lindex $argv 0]
-set key_name [lindex $argv 1]
-
-spawn soundness-cli generate-key --name $key_name
-expect "Enter password for secret key: "
+spawn soundness-labs keys add key
+expect "Enter keyring passphrase:"
 send "$password\r"
-expect "Confirm password: "
+expect "Re-enter keyring passphrase:"
 send "$password\r"
 expect eof
 EOF
+    
+    # 设置执行权限
+    chmod +x "$tmp_dir/gen_key.exp"
+    
+    # 生成指定数量的密钥
+    for ((i=1; i<=$count; i++)); do
+        echo "正在生成第 $i 个密钥..."
+        expect "$tmp_dir/gen_key.exp" "$password"
         
-        # 设置执行权限
-        chmod 700 "$exp_script"
-        
-        # 执行 expect 脚本
-        output=$(expect "$exp_script" "$password" "$key_name")
-        status=$?
-        
-        if [ $status -ne 0 ]; then
-            echo -e "${RED}生成密钥失败: $output${NC}"
-            success=false
-            break
+        if [ $? -ne 0 ]; then
+            echo "生成第 $i 个密钥时出错"
+            return 1
         fi
-        
-        # 提取公钥和助记词
-        public_key=$(echo "$output" | grep "Public key:" | cut -d' ' -f3)
-        mnemonic=$(echo "$output" | grep -A 1 "Mnemonic:" | tail -n 1)
-        
-        # 更严格的输出验证
-        if [ -z "$public_key" ] || [ -z "$mnemonic" ]; then
-            echo -e "${RED}无法提取密钥信息，请重试${NC}"
-            success=false
-            break
-        fi
-        
-        # 保存到文件
-        {
-            echo "------------------------"
-            echo "Generated at: $timestamp"
-            echo "Key $i:"
-            echo "Name: $key_name"
-            echo "Public Key: $public_key"
-            echo "Mnemonic: $mnemonic"
-            echo "------------------------"
-        } >> "$KEYS_FILE"
-        
-        echo -e "${GREEN}第 $i 个密钥生成完成${NC}"
-        echo "------------------------"
     done
     
-    [ "$success" = true ] || return 1
-    log_message "INFO" "密钥生成完成"
-}
-
-# 添加并行处理支持
-generate_keys_parallel() {
-    local count=$1
-    local batch_size=5
-    local current=0
-    
-    while [ $current -lt $count ]; do
-        local batch_count=$((count - current))
-        if [ $batch_count -gt $batch_size ]; then
-            batch_count=$batch_size
-        fi
-        
-        for ((i=1; i<=batch_count; i++)); do
-            generate_single_key "$((current + i))" "$password" &
-        done
-        
-        wait
-        current=$((current + batch_count))
-    done
+    return 0
 }
 
 # 显示所有密钥信息
@@ -485,13 +381,33 @@ show_menu() {
                     echo -e "${RED}请先安装依赖（选项1）${NC}"
                     continue
                 fi
-                echo -n "请输入要注册的账号数量: "
+                echo "请输入要注册的账号数量: "
                 read count
-                if [[ "$count" =~ ^[0-9]+$ ]]; then
-                    generate_keys "$count"
-                else
-                    echo -e "${RED}请输入有效的数字${NC}"
+                
+                if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+                    echo "错误：请输入有效的数字"
+                    continue
                 fi
+                
+                echo "请输入密码: "
+                read -s password
+                echo
+                echo "请确认密码: "
+                read -s password2
+                echo
+                
+                if [ "$password" != "$password2" ]; then
+                    echo "错误：两次输入的密码不匹配"
+                    continue
+                fi
+                
+                generate_keys "$password" "$count"
+                if [ $? -ne 0 ]; then
+                    echo "生成密钥失败"
+                    continue
+                fi
+                
+                echo "密钥生成完成"
                 ;;
             3)
                 show_keys
