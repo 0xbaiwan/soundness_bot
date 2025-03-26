@@ -114,9 +114,9 @@ install_dependencies() {
         source "$HOME/.cargo/env"
     fi
     
-    # 安装 soundness-cli
+    # 强制重新安装 soundness-cli
     echo -e "${BLUE}安装 soundness-cli...${NC}"
-    cargo install --git https://github.com/soundnesslabs/soundness-layer.git soundness-cli
+    cargo install --force --git https://github.com/soundnesslabs/soundness-layer.git soundness-cli
     
     # 复制二进制文件
     if [ -f "$HOME/.cargo/bin/soundness-cli" ]; then
@@ -128,10 +128,13 @@ install_dependencies() {
     fi
     
     # 验证安装
-    if ! "$HOME/.soundness/bin/soundness-labs" --version; then
+    if ! "$HOME/.soundness/bin/soundness-labs" --help &> /dev/null; then
         echo -e "${RED}soundness-labs 无法执行${NC}"
         return 1
     fi
+    
+    # 显示版本信息
+    "$HOME/.soundness/bin/soundness-labs" --version
     
     echo -e "${GREEN}soundness-labs 安装成功${NC}"
     return 0
@@ -154,7 +157,7 @@ check_requirements() {
         need_install=true
     else
         # 验证 soundness-labs 是否可正常执行
-        if ! "$HOME/.soundness/bin/soundness-labs" list-keys &> /dev/null; then
+        if ! "$HOME/.soundness/bin/soundness-labs" --help &> /dev/null; then
             echo -e "${BLUE}soundness-labs 需要重新安装${NC}"
             need_install=true
         fi
@@ -172,7 +175,7 @@ check_requirements() {
     # 最终验证
     if ! command -v expect &> /dev/null || \
        [ ! -x "$HOME/.soundness/bin/soundness-labs" ] || \
-       ! "$HOME/.soundness/bin/soundness-labs" list-keys &> /dev/null; then
+       ! "$HOME/.soundness/bin/soundness-labs" --help &> /dev/null; then
         echo -e "${RED}依赖安装验证失败${NC}"
         return 1
     fi
@@ -262,7 +265,11 @@ set timeout 30
 # 生成密钥
 spawn $soundness_labs_path generate-key
 expect {
-    "Enter password:" {
+    "Enter a name for the key:" {
+        send "key\$argv 1\r"
+        exp_continue
+    }
+    "Enter a password:" {
         send "\$password\r"
         exp_continue
     }
@@ -278,17 +285,22 @@ expect {
         send "\$password\r"
         exp_continue
     }
+    "Key pair generated successfully" {
+        # 成功生成
+        exit 0
+    }
     timeout {
         puts "错误：操作超时"
         exit 1
     }
-    eof
+    eof {
+        # 检查是否有错误输出
+        if {[string match "*error*" \$expect_out(buffer)]} {
+            puts "错误：命令执行失败"
+            exit 1
+        }
+    }
 }
-
-# 等待命令完成
-expect eof
-catch wait result
-exit [lindex \$result 3]
 EOF
     
     chmod +x "$tmp_dir/gen_key.exp"
@@ -296,23 +308,28 @@ EOF
     # 生成密钥
     for ((i=1; i<=$count; i++)); do
         echo -e "${BLUE}正在生成第 $i 个密钥...${NC}"
-        if ! /usr/bin/expect "$tmp_dir/gen_key.exp" "$password"; then
+        if ! /usr/bin/expect "$tmp_dir/gen_key.exp" "$password" "$i"; then
             echo -e "${RED}生成第 $i 个密钥时出错${NC}"
             return 1
         fi
         
         # 验证密钥是否生成成功
-        if "$soundness_labs_path" list-keys | grep -q "Key"; then
+        if "$soundness_labs_path" list-keys | grep -q "key$i"; then
             echo -e "${GREEN}第 $i 个密钥生成成功${NC}"
             
             # 保存密钥信息
-            echo "=== 密钥 #$i 生成时间: $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$KEYS_FILE"
-            "$soundness_labs_path" list-keys >> "$KEYS_FILE"
-            echo "=================================================" >> "$KEYS_FILE"
+            {
+                echo "=== 密钥 #$i (key$i) 生成时间: $(date '+%Y-%m-%d %H:%M:%S') ==="
+                "$soundness_labs_path" list-keys | grep -A 2 "key$i"
+                echo "================================================="
+            } >> "$KEYS_FILE"
         else
             echo -e "${RED}无法验证第 $i 个密钥是否生成成功${NC}"
             return 1
         fi
+        
+        # 短暂暂停，避免过快生成
+        sleep 1
     done
     
     return 0
@@ -324,7 +341,10 @@ show_keys() {
     
     if [ -x "$soundness_labs_path" ]; then
         echo -e "${BLUE}当前密钥列表：${NC}"
-        "$soundness_labs_path" list-keys
+        if ! "$soundness_labs_path" list-keys; then
+            echo -e "${RED}无法获取密钥列表${NC}"
+            return 1
+        fi
         
         if [ -f "$KEYS_FILE" ]; then
             echo -e "\n${BLUE}历史密钥信息：${NC}"
