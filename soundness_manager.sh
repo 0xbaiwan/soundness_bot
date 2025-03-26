@@ -260,15 +260,12 @@ generate_keys() {
     cat > "$tmp_dir/gen_key.exp" << EOF
 #!/usr/bin/expect -f
 set password [lindex \$argv 0]
+set key_name [lindex \$argv 1]
 set timeout 30
 
 # 生成密钥
-spawn $soundness_labs_path generate-key
+spawn $soundness_labs_path generate-key --name \$key_name
 expect {
-    "Enter a name for the key:" {
-        send "key\$argv 1\r"
-        exp_continue
-    }
     "Enter a password:" {
         send "\$password\r"
         exp_continue
@@ -307,20 +304,22 @@ EOF
     
     # 生成密钥
     for ((i=1; i<=$count; i++)); do
-        echo -e "${BLUE}正在生成第 $i 个密钥...${NC}"
-        if ! /usr/bin/expect "$tmp_dir/gen_key.exp" "$password" "$i"; then
+        local key_name="key$i"
+        echo -e "${BLUE}正在生成第 $i 个密钥 ($key_name)...${NC}"
+        
+        if ! /usr/bin/expect "$tmp_dir/gen_key.exp" "$password" "$key_name"; then
             echo -e "${RED}生成第 $i 个密钥时出错${NC}"
             return 1
         fi
         
         # 验证密钥是否生成成功
-        if "$soundness_labs_path" list-keys | grep -q "key$i"; then
-            echo -e "${GREEN}第 $i 个密钥生成成功${NC}"
+        if "$soundness_labs_path" list-keys | grep -q "$key_name"; then
+            echo -e "${GREEN}第 $i 个密钥 ($key_name) 生成成功${NC}"
             
             # 保存密钥信息
             {
-                echo "=== 密钥 #$i (key$i) 生成时间: $(date '+%Y-%m-%d %H:%M:%S') ==="
-                "$soundness_labs_path" list-keys | grep -A 2 "key$i"
+                echo "=== 密钥 #$i ($key_name) 生成时间: $(date '+%Y-%m-%d %H:%M:%S') ==="
+                "$soundness_labs_path" list-keys | grep -A 2 "$key_name"
                 echo "================================================="
             } >> "$KEYS_FILE"
         else
