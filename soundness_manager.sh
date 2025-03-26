@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# 防止重复执行
+if [ -n "$SCRIPT_RUNNING" ]; then
+    exit 0
+fi
+export SCRIPT_RUNNING=1
+
 # 存储密钥信息的文件
 KEYS_FILE="$HOME/.soundness_keys.txt"
 
@@ -111,10 +117,24 @@ show_menu() {
 
 # 主程序入口
 main() {
-    # 确保密钥文件存在
-    touch "$KEYS_FILE"
-    show_menu
+    # 创建临时脚本文件
+    TMP_SCRIPT=$(mktemp)
+    cat > "$TMP_SCRIPT" << 'EOF'
+#!/bin/bash
+# 确保密钥文件存在
+touch "$HOME/.soundness_keys.txt"
+# 运行菜单
+$(declare -f show_menu generate_keys show_keys check_requirements install_dependencies)
+show_menu
+EOF
+    
+    # 添加执行权限并运行
+    chmod +x "$TMP_SCRIPT"
+    bash "$TMP_SCRIPT"
+    rm "$TMP_SCRIPT"
 }
 
-# 运行主程序
-main 
+# 如果是直接运行脚本
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
+fi 
