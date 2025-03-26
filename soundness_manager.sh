@@ -107,57 +107,27 @@ install_dependencies() {
     # 清理可能存在的旧安装
     rm -f "$HOME/.soundness/bin/soundness-labs"
     
-    # 尝试从官方仓库安装
-    echo -e "${BLUE}尝试从官方仓库安装...${NC}"
-    
-    # 克隆仓库
-    if ! git clone https://github.com/soundnesslabs/soundness-layer.git /tmp/soundness-build; then
-        echo -e "${RED}克隆仓库失败${NC}"
-        return 1
+    # 安装 Rust（如果需要）
+    if ! command -v cargo &> /dev/null; then
+        echo -e "${BLUE}安装 Rust...${NC}"
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source "$HOME/.cargo/env"
     fi
     
-    # 进入仓库目录
-    cd /tmp/soundness-build || return 1
+    # 安装 soundness-cli
+    echo -e "${BLUE}安装 soundness-cli...${NC}"
+    cargo install --git https://github.com/soundnesslabs/soundness-layer.git soundness-cli
     
-    # 检查是否有预编译的二进制文件
-    if [ -f "bin/soundness-labs" ]; then
-        echo -e "${BLUE}找到预编译二进制文件${NC}"
-        cp bin/soundness-labs "$HOME/.soundness/bin/"
+    # 复制二进制文件
+    if [ -f "$HOME/.cargo/bin/soundness-cli" ]; then
+        cp "$HOME/.cargo/bin/soundness-cli" "$HOME/.soundness/bin/soundness-labs"
         chmod +x "$HOME/.soundness/bin/soundness-labs"
     else
-        echo -e "${BLUE}未找到预编译二进制文件，尝试编译...${NC}"
-        
-        # 安装 Rust（如果需要）
-        if ! command -v cargo &> /dev/null; then
-            echo -e "${BLUE}安装 Rust...${NC}"
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source "$HOME/.cargo/env"
-        fi
-        
-        # 编译
-        if ! cargo build --release; then
-            echo -e "${RED}编译失败${NC}"
-            cd - > /dev/null
-            rm -rf /tmp/soundness-build
-            return 1
-        fi
-        
-        # 复制编译好的二进制文件
-        cp target/release/soundness-labs "$HOME/.soundness/bin/"
-        chmod +x "$HOME/.soundness/bin/soundness-labs"
-    fi
-    
-    # 清理
-    cd - > /dev/null
-    rm -rf /tmp/soundness-build
-    
-    # 验证安装
-    if ! command -v soundness-labs &> /dev/null; then
-        echo -e "${RED}soundness-labs 安装失败${NC}"
+        echo -e "${RED}soundness-cli 安装失败${NC}"
         return 1
     fi
     
-    # 验证可执行性
+    # 验证安装
     if ! "$HOME/.soundness/bin/soundness-labs" --version; then
         echo -e "${RED}soundness-labs 无法执行${NC}"
         return 1
@@ -179,8 +149,15 @@ check_requirements() {
     fi
     
     # 检查 soundness-labs
-    if ! command -v soundness-labs &> /dev/null; then
+    if [ ! -x "$HOME/.soundness/bin/soundness-labs" ]; then
         echo -e "${BLUE}需要安装 soundness-labs${NC}"
+        install_dependencies
+        return $?
+    fi
+    
+    # 验证 soundness-labs 是否可执行
+    if ! "$HOME/.soundness/bin/soundness-labs" --version &> /dev/null; then
+        echo -e "${BLUE}soundness-labs 需要重新安装${NC}"
         install_dependencies
         return $?
     fi
@@ -262,20 +239,16 @@ generate_keys() {
     fi
     
     # 验证版本
-    if ! "$soundness_labs_path" --version; then
+    if ! "$soundness_labs_path" --version &> /dev/null; then
         echo -e "${RED}错误：soundness-labs 命令无法执行${NC}"
         return 1
     fi
     
-    # 创建并测试 expect 脚本
+    # 创建 expect 脚本
     cat > "$tmp_dir/gen_key.exp" << EOF
 #!/usr/bin/expect -f
 set password [lindex \$argv 0]
 set timeout 30
-
-# 测试命令
-spawn $soundness_labs_path --version
-expect eof
 
 # 生成密钥
 spawn $soundness_labs_path keys add key
