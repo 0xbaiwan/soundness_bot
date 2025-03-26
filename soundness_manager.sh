@@ -91,86 +91,89 @@ install_dependencies() {
     
     # 安装 expect
     if ! command -v expect &> /dev/null; then
-        echo "正在安装 expect..."
+        echo -e "${BLUE}正在安装 expect...${NC}"
         sudo apt-get update && sudo apt-get install -y expect || {
-            echo "错误：expect 安装失败"
+            echo -e "${RED}expect 安装失败${NC}"
             return 1
         }
     fi
     
     # 安装 soundness-labs
-    echo "正在安装 soundness-labs..."
+    echo -e "${BLUE}正在安装 soundness-labs...${NC}"
     
     # 创建必要的目录
     mkdir -p "$HOME/.soundness/bin"
     
+    # 清理可能存在的旧安装
+    rm -f "$HOME/.soundness/bin/soundness-labs"
+    
     # 安装 soundnessup
+    echo -e "${BLUE}安装 soundnessup...${NC}"
     curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash
     
     # 确保 PATH 包含 soundness 目录
     export PATH="$HOME/.soundness/bin:$PATH"
+    source "$HOME/.bashrc"
     
-    # 运行 soundnessup install
+    # 运行 soundnessup install 并等待完成
+    echo -e "${BLUE}运行 soundnessup install...${NC}"
     soundnessup install
     
+    # 等待安装完成
+    echo -e "${BLUE}等待安装完成...${NC}"
+    sleep 10
+    
     # 运行 soundnessup update
+    echo -e "${BLUE}更新 soundness...${NC}"
     soundnessup update
     
-    # 等待几秒钟让安装完成
+    # 再次等待
     sleep 5
     
     # 验证安装
     if ! command -v soundness-labs &> /dev/null; then
-        echo "错误：soundness-labs 安装失败"
-        return 1
+        echo -e "${RED}错误：soundness-labs 安装失败${NC}"
+        echo -e "${BLUE}尝试直接下载二进制文件...${NC}"
+        
+        # 尝试直接下载二进制文件
+        curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/bin/soundness-labs -o "$HOME/.soundness/bin/soundness-labs"
+        chmod +x "$HOME/.soundness/bin/soundness-labs"
+        
+        # 最后验证
+        if ! command -v soundness-labs &> /dev/null; then
+            echo -e "${RED}安装失败，请访问 https://github.com/SoundnessLabs/soundness-layer 获取手动安装指南${NC}"
+            return 1
+        fi
     fi
     
-    echo "soundness-labs 安装成功"
+    echo -e "${GREEN}soundness-labs 安装成功${NC}"
+    
+    # 显示版本信息
+    echo -e "${BLUE}当前版本信息：${NC}"
+    soundness-labs version
+    
     return 0
 }
 
 # 检查必要的命令是否安装
 check_requirements() {
-    local need_install=false
+    echo -e "${BLUE}检查依赖项...${NC}"
     
-    # 检查所有依赖
-    local all_deps=("expect" "cargo" "soundness-cli" "soundnessup")
-    for dep in "${all_deps[@]}"; do
-        if ! command -v "$dep" &> /dev/null; then
-            need_install=true
-            break
-        fi
-    done
-    
-    # 如果需要安装任何组件
-    if [ "$need_install" = true ]; then
-        echo -e "${BLUE}检测到未安装的必要组件，开始安装...${NC}"
+    # 检查 expect
+    if ! command -v expect &> /dev/null; then
+        echo -e "${BLUE}需要安装 expect${NC}"
         install_dependencies
-        
-        # 验证安装结果
-        local failed=false
-        for dep in "${all_deps[@]}"; do
-            if ! command -v "$dep" &> /dev/null; then
-                echo -e "${RED}${dep} 安装失败${NC}"
-                failed=true
-            fi
-        done
-        
-        if [ "$failed" = true ]; then
-            echo -e "${RED}部分组件安装失败，请尝试手动安装：${NC}"
-            echo "1. sudo apt-get update && sudo apt-get install expect"
-            echo "2. curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-            echo "3. source \$HOME/.cargo/env"
-            echo "4. curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
-            echo "5. source ~/.bashrc"
-            echo "6. soundnessup install"
-            echo "7. soundnessup update"
-            return 1
-        fi
-    else
-        echo -e "${GREEN}所有依赖已安装${NC}"
+        return $?
     fi
     
+    # 检查 soundness-labs
+    if ! command -v soundness-labs &> /dev/null; then
+        echo -e "${BLUE}需要安装 soundness-labs${NC}"
+        install_dependencies
+        return $?
+    fi
+    
+    echo -e "${GREEN}所有依赖已安装${NC}"
     return 0
 }
 
@@ -337,27 +340,32 @@ initialize_environment() {
     mkdir -p "$HOME/.soundness/bin" "$HOME/.soundness/logs"
     
     # 检查并安装基本依赖
-    if ! command -v curl &> /dev/null || ! command -v expect &> /dev/null; then
-        echo -e "${BLUE}安装基本依赖...${NC}"
-        if ! sudo apt-get update && sudo apt-get install -y curl expect; then
-            echo -e "${RED}安装基本依赖失败${NC}"
+    if ! command -v curl &> /dev/null; then
+        echo -e "${BLUE}安装 curl...${NC}"
+        sudo apt-get update && sudo apt-get install -y curl || {
+            echo -e "${RED}curl 安装失败${NC}"
             return 1
-        fi
+        }
     fi
     
-    # 清理可能的旧安装
-    if [ -d "$HOME/.soundness" ]; then
-        echo -e "${BLUE}检测到旧安装，是否清理？(y/n)${NC}"
-        read -r response
-        if [[ "$response" =~ ^[Yy]$ ]]; then
-            echo -e "${BLUE}清理旧安装...${NC}"
-            rm -rf "$HOME/.soundness"
-            mkdir -p "$HOME/.soundness/bin"
-        fi
+    # 安装 expect
+    if ! command -v expect &> /dev/null; then
+        echo -e "${BLUE}安装 expect...${NC}"
+        sudo apt-get install -y expect || {
+            echo -e "${RED}expect 安装失败${NC}"
+            return 1
+        }
     fi
     
-    # 重新加载环境变量
-    load_env
+    # 设置正确的权限
+    chmod 700 "$HOME/.soundness"
+    chmod 700 "$HOME/.soundness/bin"
+    
+    # 更新 PATH
+    if [[ ":$PATH:" != *":$HOME/.soundness/bin:"* ]]; then
+        echo "export PATH=\"\$HOME/.soundness/bin:\$PATH\"" >> "$HOME/.bashrc"
+        export PATH="$HOME/.soundness/bin:$PATH"
+    fi
     
     echo -e "${GREEN}环境初始化完成${NC}"
     return 0
@@ -505,4 +513,4 @@ EOF
 }
 
 # 运行主程序
-main 
+main  
