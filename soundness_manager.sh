@@ -88,91 +88,44 @@ load_env() {
 # 安装依赖
 install_dependencies() {
     log_message "INFO" "开始安装依赖"
-    # 确保有 sudo 权限
-    if ! sudo -v; then
-        echo -e "${RED}需要 sudo 权限来安装依赖${NC}"
-        return 1
-    fi
-    
-    # 确保网络连接（使用多个目标）
-    local connected=false
-    for host in google.com baidu.com github.com; do
-        if ping -c 1 "$host" &> /dev/null; then
-            connected=true
-            break
-        fi
-    done
-    
-    if ! $connected; then
-        echo -e "${RED}网络连接异常，请检查网络${NC}"
-        return 1
-    fi
-    
-    echo -e "${BLUE}正在安装必要组件...${NC}"
     
     # 安装 expect
     if ! command -v expect &> /dev/null; then
-        echo -e "${GREEN}安装 expect...${NC}"
-        sudo apt-get update && sudo apt-get install expect -y || {
-            echo -e "${RED}expect 安装失败${NC}"
+        echo "正在安装 expect..."
+        sudo apt-get update && sudo apt-get install -y expect || {
+            echo "错误：expect 安装失败"
             return 1
         }
     fi
     
-    # 检查并安装 Rust
-    if ! command -v cargo &> /dev/null; then
-        echo -e "${GREEN}安装 Rust...${NC}"
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || {
-            echo -e "${RED}Rust 安装失败${NC}"
-            return 1
-        }
-        # shellcheck source=/dev/null
-        source "$HOME/.cargo/env"
+    # 安装 soundness-labs
+    echo "正在安装 soundness-labs..."
+    
+    # 创建必要的目录
+    mkdir -p "$HOME/.soundness/bin"
+    
+    # 安装 soundnessup
+    curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash
+    
+    # 确保 PATH 包含 soundness 目录
+    export PATH="$HOME/.soundness/bin:$PATH"
+    
+    # 运行 soundnessup install
+    soundnessup install
+    
+    # 运行 soundnessup update
+    soundnessup update
+    
+    # 等待几秒钟让安装完成
+    sleep 5
+    
+    # 验证安装
+    if ! command -v soundness-labs &> /dev/null; then
+        echo "错误：soundness-labs 安装失败"
+        return 1
     fi
-
-    # 安装 soundness-cli
-    echo -e "${GREEN}安装 soundness-cli...${NC}"
-    curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash || {
-        echo -e "${RED}soundness-cli 安装失败${NC}"
-        return 1
-    }
     
-    # 更新环境变量
-    load_env
-    
-    # 安装和更新 soundness
-    echo -e "${GREEN}安装和更新 soundness...${NC}"
-    
-    # 尝试多次安装（有时候第一次可能失败）
-    for i in {1..3}; do
-        if soundnessup install; then
-            break
-        elif [ "$i" -eq 3 ]; then
-            echo -e "${RED}soundness 安装失败，已重试 3 次${NC}"
-            return 1
-        else
-            echo -e "${BLUE}安装失败，正在重试 ($i/3)...${NC}"
-            sleep 2
-        fi
-    done
-
-    # 更新 soundness
-    soundnessup update || {
-        echo -e "${RED}soundness 更新失败${NC}"
-        return 1
-    }
-    
-    # 验证所有组件
-    local all_deps=("expect" "cargo" "soundness-cli" "soundnessup")
-    for dep in "${all_deps[@]}"; do
-        if ! command -v "$dep" &> /dev/null; then
-            echo -e "${RED}${dep} 安装失败${NC}"
-            return 1
-        fi
-    done
-
-    echo -e "${GREEN}依赖安装完成！${NC}"
-    log_message "INFO" "依赖安装完成"
+    echo "soundness-labs 安装成功"
     return 0
 }
 
@@ -281,22 +234,38 @@ retry_command() {
     return 1
 }
 
-# 修改生成密钥的函数
+# 修改 generate_keys 函数
 generate_keys() {
     local password=$1
     local count=$2
     
+    # 检查并安装依赖
+    if ! command -v soundness-labs &> /dev/null; then
+        echo "错误：找不到 soundness-labs 命令"
+        echo "正在尝试安装依赖..."
+        install_dependencies
+        
+        # 再次检查命令
+        if ! command -v soundness-labs &> /dev/null; then
+            echo "错误：安装依赖失败，请手动安装 soundness-labs"
+            return 1
+        fi
+    fi
+    
+    # 获取 soundness-labs 完整路径
+    local soundness_labs_path=$(which soundness-labs)
+    
     # 创建 expect 脚本
-    cat > "$tmp_dir/gen_key.exp" << 'EOF'
+    cat > "$tmp_dir/gen_key.exp" << EOF
 #!/usr/bin/expect -f
-set password [lindex $argv 0]
+set password [lindex \$argv 0]
 set timeout -1
 
-spawn soundness-labs keys add key
+spawn $soundness_labs_path keys add key
 expect "Enter keyring passphrase:"
-send "$password\r"
+send "\$password\r"
 expect "Re-enter keyring passphrase:"
-send "$password\r"
+send "\$password\r"
 expect eof
 EOF
     
@@ -306,12 +275,16 @@ EOF
     # 生成指定数量的密钥
     for ((i=1; i<=$count; i++)); do
         echo "正在生成第 $i 个密钥..."
-        expect "$tmp_dir/gen_key.exp" "$password"
+        
+        # 使用完整路径执行 expect 脚本
+        /usr/bin/expect "$tmp_dir/gen_key.exp" "$password"
         
         if [ $? -ne 0 ]; then
             echo "生成第 $i 个密钥时出错"
             return 1
         fi
+        
+        echo "第 $i 个密钥生成成功"
     done
     
     return 0
@@ -356,29 +329,71 @@ backup_keys() {
     fi
 }
 
-# 主菜单
+# 添加初始化函数
+initialize_environment() {
+    echo -e "${BLUE}正在初始化环境...${NC}"
+    
+    # 创建必要的目录
+    mkdir -p "$HOME/.soundness/bin" "$HOME/.soundness/logs"
+    
+    # 检查并安装基本依赖
+    if ! command -v curl &> /dev/null || ! command -v expect &> /dev/null; then
+        echo -e "${BLUE}安装基本依赖...${NC}"
+        if ! sudo apt-get update && sudo apt-get install -y curl expect; then
+            echo -e "${RED}安装基本依赖失败${NC}"
+            return 1
+        fi
+    fi
+    
+    # 清理可能的旧安装
+    if [ -d "$HOME/.soundness" ]; then
+        echo -e "${BLUE}检测到旧安装，是否清理？(y/n)${NC}"
+        read -r response
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            echo -e "${BLUE}清理旧安装...${NC}"
+            rm -rf "$HOME/.soundness"
+            mkdir -p "$HOME/.soundness/bin"
+        fi
+    fi
+    
+    # 重新加载环境变量
+    load_env
+    
+    echo -e "${GREEN}环境初始化完成${NC}"
+    return 0
+}
+
+# 修改主菜单
 show_menu() {
     while true; do
         echo -e "\n${BLUE}=== Soundness Labs 测试网白名单管理 ===${NC}"
-        echo "1. 安装依赖"
-        echo "2. 注册白名单"
-        echo "3. 查看密钥信息"
-        echo "4. 备份密钥文件"
-        echo "5. 退出"
-        echo -n "请选择操作 (1-5): "
+        echo "1. 初始化环境"
+        echo "2. 安装依赖"
+        echo "3. 注册白名单"
+        echo "4. 查看密钥信息"
+        echo "5. 备份密钥文件"
+        echo "6. 退出"
+        echo -n "请选择操作 (1-6): "
         
         read choice
         case $choice in
             1)
+                if initialize_environment; then
+                    echo -e "${GREEN}环境初始化完成！${NC}"
+                else
+                    echo -e "${RED}环境初始化失败${NC}"
+                fi
+                ;;
+            2)
                 if check_requirements; then
                     echo -e "${GREEN}依赖安装完成！${NC}"
                 else
                     echo -e "${RED}依赖安装失败，请查看上述错误信息${NC}"
                 fi
                 ;;
-            2)
-                if ! command -v soundness-cli &> /dev/null; then
-                    echo -e "${RED}请先安装依赖（选项1）${NC}"
+            3)
+                if ! command -v soundness-labs &> /dev/null; then
+                    echo -e "${RED}请先初始化环境并安装依赖（选项1和2）${NC}"
                     continue
                 fi
                 echo "请输入要注册的账号数量: "
@@ -409,13 +424,13 @@ show_menu() {
                 
                 echo "密钥生成完成"
                 ;;
-            3)
+            4)
                 show_keys
                 ;;
-            4)
+            5)
                 backup_keys
                 ;;
-            5)
+            6)
                 echo -e "${GREEN}感谢使用，再见！${NC}"
                 exit 0
                 ;;
@@ -440,7 +455,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'echo -e "${RED}脚本被中断${NC}"; cleanup; exit 1' INT TERM HUP
 
-# 主程序入口
+# 修改一键运行命令
 main() {
     # 检查系统兼容性
     if [ "$(uname)" != "Linux" ]; then
@@ -448,26 +463,19 @@ main() {
         exit 1
     fi
     
-    # 检查必要命令
-    for cmd in curl grep awk chmod mkdir rm ping; do
-        if ! command -v "$cmd" &> /dev/null; then
-            echo -e "${RED}缺少必要命令: $cmd${NC}"
-            exit 1
-        fi
-    done
+    # 自动初始化环境
+    if ! initialize_environment; then
+        echo -e "${RED}环境初始化失败，请手动执行初始化（选项1）${NC}"
+    fi
     
-    # 初始化
+    # 检查文件权限
     check_file_permissions
+    
+    # 创建必要的文件
     touch "$KEYS_FILE" || {
         echo -e "${RED}无法创建密钥文件${NC}"
         exit 1
     }
-    
-    # 加载环境变量
-    load_env
-    
-    # 加载配置
-    load_config
     
     # 运行菜单
     show_menu
