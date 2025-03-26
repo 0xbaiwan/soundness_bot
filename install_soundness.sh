@@ -54,57 +54,100 @@ generate_random_name() {
     echo "${adj}_${noun}_${num}"
 }
 
-# 生成单个密钥
+# 生成单个密钥并保存
 generate_key() {
-    local key_name=$(generate_random_name)
-    echo "正在生成密钥 ${key_name}..."
-    echo "${RED}注意：请务必保存生成的24个助记词！${NC}"
-    soundness-cli generate-key --name "$key_name"
+    local key_name=$1
+    local log_file=$2
+    local is_batch=$3
+    
+    echo "${GREEN}正在生成密钥 ${key_name}...${NC}"
+    
+    # 创建日志目录（如果是单个生成）
+    if [ -z "$is_batch" ]; then
+        mkdir -p ./soundness_keys
+        local timestamp=$(date +%Y%m%d_%H%M%S)
+        log_file="./soundness_keys/keys_${timestamp}.txt"
+        echo "=== Soundness Keys Generated at $(date) ===" > "$log_file"
+        echo "----------------------------------------" >> "$log_file"
+    fi
+    
+    # 记录密钥信息到日志
+    echo "=== Key: $key_name ===" >> "$log_file"
+    echo "----------------------------------------" >> "$log_file"
+    
+    # 执行生成命令并捕获输出
+    local output
+    output=$(soundness-cli generate-key --name "$key_name" 2>&1)
+    local status=$?
+    
+    # 保存输出到日志
+    echo "$output" >> "$log_file"
+    echo "----------------------------------------" >> "$log_file"
+    echo "" >> "$log_file"
+    
+    # 显示结果
+    if [ $status -eq 0 ]; then
+        echo "${GREEN}✓ 密钥 $key_name 生成成功${NC}"
+        echo "$output"
+    else
+        echo "${RED}✗ 密钥 $key_name 生成失败${NC}"
+        echo "Error: $output"
+    fi
+    
+    # 如果是单个生成，显示保存位置
+    if [ -z "$is_batch" ]; then
+        echo "${GREEN}密钥信息已保存至: $log_file${NC}"
+        echo "${RED}请立即备份该文件！${NC}"
+    fi
+    
+    return $status
 }
 
 # 批量生成密钥
 generate_multiple_keys() {
     local count=$1
     echo "正在批量生成 ${count} 个密钥..."
-    echo "${RED}注意：请务必保存每组生成的24个助记词！${NC}"
+    echo "${RED}注意：请务必保存每组生成的助记词！${NC}"
     
-    # 创建日志目录
+    # 创建日志目录和文件
     mkdir -p ./soundness_keys
     local timestamp=$(date +%Y%m%d_%H%M%S)
     local log_file="./soundness_keys/keys_${timestamp}.txt"
     
     echo "=== Soundness Keys Generated at $(date) ===" > "$log_file"
+    echo "Total keys to generate: $count" >> "$log_file"
     echo "----------------------------------------" >> "$log_file"
+    echo "" >> "$log_file"
+    
+    local success_count=0
     
     for i in $(seq 1 $count); do
         local key_name=$(generate_random_name)
-        echo "${GREEN}正在生成密钥 $key_name...${NC}"
-        echo "=== Key $i: $key_name ===" >> "$log_file"
-        echo "----------------------------------------" >> "$log_file"
         
-        # 运行命令并捕获完整输出
-        local output
-        output=$(soundness-cli generate-key --name "$key_name" 2>&1)
+        # 生成单个密钥
+        generate_key "$key_name" "$log_file" "batch"
         
-        # 检查命令是否成功
         if [ $? -eq 0 ]; then
-            echo "$output" >> "$log_file"
-            echo "${GREEN}✓ 密钥 $key_name 生成成功${NC}"
-        else
-            echo "${RED}✗ 密钥 $key_name 生成失败${NC}"
-            echo "Error: $output" >> "$log_file"
+            ((success_count++))
         fi
-        
-        echo "----------------------------------------" >> "$log_file"
-        echo "" >> "$log_file"
         
         # 随机延迟2-5秒
         sleep $((RANDOM % 4 + 2))
     done
     
-    echo "${GREEN}所有密钥已生成完成！${NC}"
+    # 添加统计信息
+    echo "" >> "$log_file"
+    echo "=== Generation Summary ===" >> "$log_file"
+    echo "Total attempted: $count" >> "$log_file"
+    echo "Successfully generated: $success_count" >> "$log_file"
+    echo "Failed: $((count - success_count))" >> "$log_file"
+    echo "----------------------------------------" >> "$log_file"
+    
+    echo "${GREEN}批量生成完成！${NC}"
+    echo "成功生成: $success_count 个密钥"
+    echo "失败: $((count - success_count)) 个密钥"
     echo "密钥信息已保存至: $log_file"
-    echo "${RED}请立即备份 $log_file 文件！${NC}"
+    echo "${RED}请立即备份该文件！${NC}"
 }
 
 # 查询密钥信息
@@ -170,7 +213,7 @@ main() {
     if [ -n "$1" ] && [ "$1" -gt 0 ] 2>/dev/null; then
         generate_multiple_keys "$1"
     else
-        generate_key
+        generate_key "$(generate_random_name)" "" ""
     fi
     
     echo "${GREEN}安装完成！${NC}"
