@@ -75,19 +75,28 @@ generate_key() {
     echo "=== Key: $key_name ===" >> "$log_file"
     echo "----------------------------------------" >> "$log_file"
     
-    # 使用expect自动处理密码输入
+    # 创建一个临时脚本来自动输入密码
+    local tmp_script=$(mktemp)
+    cat > "$tmp_script" << 'EOF'
+#!/usr/bin/expect -f
+set timeout -1
+set key_name [lindex $argv 0]
+spawn soundness-cli generate-key --name $key_name
+expect "Enter password for secret key:"
+send "\r"
+expect "Confirm password:"
+send "\r"
+expect eof
+EOF
+    chmod +x "$tmp_script"
+    
+    # 执行临时脚本并捕获输出
     local output
-    output=$(expect -c "
-        set timeout 10
-        spawn soundness-cli generate-key --name \"$key_name\"
-        expect \"Enter password for secret key:\"
-        send \"\r\"
-        expect \"Confirm password:\"
-        send \"\r\"
-        expect eof
-        catch wait result
-    " 2>&1)
+    output=$("$tmp_script" "$key_name" 2>&1)
     local status=$?
+    
+    # 删除临时脚本
+    rm -f "$tmp_script"
     
     # 保存输出到日志
     echo "$output" >> "$log_file"
@@ -120,6 +129,10 @@ install_expect() {
         echo "正在安装 expect..."
         sudo apt-get update
         sudo apt-get install -y expect
+        if [ $? -ne 0 ]; then
+            echo "${RED}Error: expect 安装失败${NC}"
+            exit 1
+        fi
     fi
 }
 
