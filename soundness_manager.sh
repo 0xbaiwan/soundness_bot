@@ -139,26 +139,33 @@ check_requirements() {
 # 生成并保存密钥
 generate_keys() {
     local count=$1
-    
-    # 验证输入数量
-    if [ "$count" -gt 10 ]; then
-        echo -e "${RED}为防止滥用，单次最多生成 10 个密钥${NC}"
-        return 1
-    fi
+    local password=$2
+    local words=("apple" "banana" "cherry" "dragon" "eagle" "falcon" "grape" "horse" "island" "jaguar" "koala" "lemon" "mango" "ninja" "orange" "panda" "queen" "rabbit" "snake" "tiger" "umbrella" "violet" "whale" "xenon" "yellow" "zebra")
     
     # 检查磁盘空间
     if [ "$(df -P "$HOME" | awk 'NR==2 {print $4}')" -lt 1048576 ]; then
         echo -e "${RED}磁盘空间不足，请确保有至少 1GB 可用空间${NC}"
         return 1
     fi
+
+    # 询问密码（如果未提供）
+    if [ -z "$password" ]; then
+        echo -n "请输入密码（所有白名单将共用此密码）: "
+        read -s password
+        echo
+    fi
     
     for ((i=1; i<=count; i++)); do
         echo -e "${GREEN}正在生成第 $i 个密钥...${NC}"
-        local key_name="soundness_key_$i"
+        
+        # 生成随机密钥名称
+        local random_word=${words[$RANDOM % ${#words[@]}]}
+        local random_num=$((RANDOM % 10000))
+        local key_name="${random_word}_${random_num}"
         local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
         
         # 生成密钥并捕获输出
-        output=$(soundness-cli generate-key --name "$key_name" 2>&1)
+        output=$(echo "$password" | soundness-cli generate-key --name "$key_name" 2>&1)
         
         if [ $? -ne 0 ]; then
             echo -e "${RED}生成密钥失败，请确保 soundness-cli 已正确安装${NC}"
@@ -175,7 +182,7 @@ generate_keys() {
             return 1
         fi
         
-        # 保存到文件（时间戳放在开头）
+        # 保存到文件
         {
             echo "------------------------"
             echo "Generated at: $timestamp"
@@ -214,31 +221,39 @@ backup_keys() {
 show_menu() {
     while true; do
         echo -e "\n${BLUE}=== Soundness Labs 测试网白名单管理 ===${NC}"
-        echo "1. 注册白名单"
-        echo "2. 查看密钥信息"
-        echo "3. 备份密钥文件"
-        echo "4. 退出"
-        echo -n "请选择操作 (1-4): "
+        echo "1. 安装依赖"
+        echo "2. 注册白名单"
+        echo "3. 查看密钥信息"
+        echo "4. 备份密钥文件"
+        echo "5. 退出"
+        echo -n "请选择操作 (1-5): "
         
         read choice
         case $choice in
             1)
+                check_requirements
+                echo -e "${GREEN}依赖安装完成！${NC}"
+                ;;
+            2)
+                if ! command -v soundness-cli &> /dev/null; then
+                    echo -e "${RED}请先安装依赖（选项1）${NC}"
+                    continue
+                fi
                 echo -n "请输入要注册的账号数量: "
                 read count
                 if [[ "$count" =~ ^[0-9]+$ ]]; then
-                    check_requirements
                     generate_keys "$count"
                 else
                     echo -e "${RED}请输入有效的数字${NC}"
                 fi
                 ;;
-            2)
+            3)
                 show_keys
                 ;;
-            3)
+            4)
                 backup_keys
                 ;;
-            4)
+            5)
                 echo -e "${GREEN}感谢使用，再见！${NC}"
                 exit 0
                 ;;
