@@ -7,7 +7,7 @@
 复制以下命令到终端运行即可：
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/0xbaiwan/soundness_bot/main/soundness_manager.sh | bash
+curl -sSL https://raw.githubusercontent.com/0xbaiwan/soundness_bot/main/soundness_manager.sh > /tmp/soundness_manager.sh && bash /tmp/soundness_manager.sh
 ```
 
 ## 功能特点
